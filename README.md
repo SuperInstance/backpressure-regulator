@@ -76,6 +76,10 @@ The Backpressure Regulator enforces the **flow conservation** aspect of γ + η 
 
 See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md).
 
+**Cascading failure prevention:** Without backpressure, a single slow downstream service can bring down an entire fleet. The failure cascade follows a predictable pattern: (1) slow service's queue grows, (2) queue consumes available memory, (3) GC pressure causes further slowdown, (4) upstream callers block on timeouts, (5) their threads exhaust, (6) their callers time out — the failure propagates upstream through every dependency. The backpressure regulator breaks this chain at step 1 by rejecting excess messages before the queue grows unboundedly.
+
+**Reactive Streams standard:** The backpressure regulator implements the same semantics as the Reactive Streams specification (adopted in Java 9 Flow API, Project Reactor, RxJava, Akka Streams). The four protocol operations — `subscribe`, `onNext`, `onError`, `onComplete` — map to the regulator's send/reject/complete/error transitions.
+
 ## References
 
 1. Little, J.D.C. (1961). "A Proof for the Queuing Formula L = λW." *Operations Research*, 9(3), 383–387.
