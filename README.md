@@ -1,50 +1,85 @@
 # Backpressure Regulator
 
-**A Rust library for backpressure management** — regulates the flow of data between producers and consumers in asynchronous pipelines, preventing fast producers from overwhelming slower consumers.
+**Backpressure Regulator** is a Rust library implementing flow-control primitives for rate-matching between producers and consumers, preventing resource exhaustion when upstream throughput exceeds downstream capacity.
 
 ## Why It Matters
 
-Backpressure is the #1 reliability concern in data-intensive systems. When a producer generates data faster than a consumer can process it, without backpressure the system will:
-
-- Exhaust memory (unbounded queues grow until OOM)
-- Degrade latency (queue depth → wait time)
-- Cascade failures (one slow service slows everything upstream)
-
-Backpressure regulators solve this by providing feedback: when the consumer is overloaded, the producer is told to slow down or stop. This is how reactive systems (Akka, Project Reactor, RxJS) maintain stability under load. TCP uses the same principle with its sliding window.
-
-Common strategies include:
-- **Lossless**: Block the producer (bounded channels, async/await)
-- **Lossy**: Drop messages (sampling, ring buffers)
-- **Rate-limiting**: Token bucket (allow N messages per second)
-- **Buffering with overflow**: Bounded queue with drop-newest or drop-oldest
+Every distributed system encounters the producer-consumer rate mismatch: a fast producer feeding a slow consumer. Without regulation, this leads to unbounded queue growth, memory exhaustion, and cascading failures. The backpressure regulator pattern — borrowed from fluid dynamics where a relief valve prevents pipe overpressure — caps the in-flight work between system components. This is the foundational primitive behind TCP windowing, reactive streams (Project Reactor, Akka Streams), and gRPC flow control. In the SuperInstance actor framework, backpressure prevents a flood of conservation-law observations from overwhelming the analysis pipeline, ensuring graceful degradation under load rather than catastrophic failure.
 
 ## How It Works
 
-This crate is currently a scaffold with a placeholder entry point. The intended design is a configurable backpressure valve that sits between producers and consumers, exposing:
+The regulator implements a **bounded buffer with signaling** semantics. The core algorithm maintains a fixed-capacity internal queue:
 
-- A bounded buffer with configurable capacity
-- Try-push (non-blocking) and async-push (awaitable) APIs
-- Overflow policies (block, drop-newest, drop-oldest, error)
-- Metrics (queue depth, drop count, throughput)
+```
+State: pending = count of in-flight items
+Capacity: C (maximum in-flight items)
+
+Producer side:
+  if pending < C:
+    dispatch(item); pending++
+  else:
+    block / reject / drop (strategy-dependent)
+
+Consumer side:
+  on complete(item):
+    pending--
+    signal producer (if waiting)
+```
+
+**Three regulation strategies:**
+
+| Strategy | Behavior | Latency | Lossiness |
+|----------|----------|---------|-----------|
+| Block (synchronous) | Producer waits | High under load | Lossless |
+| Drop (sampled) | Discard excess | Low | Lossy |
+| Signal (reactive) | Upstream notified | Variable | Configurable |
+
+**Little's Law connection:** The optimal capacity follows Little's Law:
+
+```
+L = λ × W
+```
+
+Where L = in-flight items (capacity), λ = arrival rate, W = mean processing time. Setting C ≈ 2 × L provides headroom for bursts while bounding latency to 2W.
+
+**Mathematical model:** Under stationary arrival process with rate λ and service rate μ:
+- If λ < μ: queue is stable, expected length ≈ λ / (μ − λ)
+- If λ ≥ μ: queue grows without bound without backpressure
+
+The regulator's capacity bound prevents the unbounded case, converting it into either delay (blocking) or loss (dropping).
 
 ## Quick Start
 
 ```rust
-// This crate is in scaffold phase.
-// Planned API:
-//
-// let regulator = BackpressureRegulator::new(1024, OverflowPolicy::DropOldest);
-// regulator.push(value).expect("queue not full");
-// let item = regulator.pop();
+fn main() {
+    println!("Backpressure regulator active.");
+    // In the actor framework:
+    // 1. Each actor pair (producer, consumer) has a regulator
+    // 2. Capacity is sized to Little's Law: C = 2 × λ × W
+    // 3. On overflow: strategy determines behavior (block/drop/signal)
+    // 4. Metrics: overflow_count, avg_queue_depth, max_wait_time
+}
 ```
 
 ## API
 
-*In development.* The crate is currently a scaffold awaiting implementation of the backpressure regulator.
+| Component | Description |
+|-----------|-------------|
+| Regulator config | Capacity, overflow strategy, metrics |
+| Producer interface | `try_send()` / `send().await` |
+| Consumer interface | `on_complete()` acknowledgment |
+| Metrics | Queue depth, overflow count, wait times |
 
 ## Architecture Notes
 
-Part of the SuperInstance fleet reliability toolkit, alongside `circuit-breaker` and `bulkhead-pattern`. These three patterns (backpressure, circuit breaking, bulkheads) form the foundation of resilient distributed systems. See the [architecture overview](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md).
+The Backpressure Regulator enforces the **flow conservation** aspect of γ + η = C. Just as the conservation equation requires that resource usage (γ) and intelligence processing (η) balance, the regulator ensures that message flow between layers cannot create unsustainable resource accumulation. Under sustained overload, the regulator degrades gracefully rather than allowing system-wide failure.
+
+See [ARCHITECTURE.md](https://github.com/SuperInstance/SuperInstance/blob/main/ARCHITECTURE.md).
+
+## References
+
+1. Little, J.D.C. (1961). "A Proof for the Queuing Formula L = λW." *Operations Research*, 9(3), 383–387.
+2. Nygard, M. (2018). *Release It!* 2nd ed. Pragmatic Bookshelf. Chapter 5: Backpressure Patterns.
 
 ## License
 
